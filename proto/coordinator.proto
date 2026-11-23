@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package coordinator;
+
+option go_package = "api-load-testing-engine/proto;coordinator";
+
+import "google/protobuf/timestamp.proto";
+
+service Coordinator {
+  rpc Connect(stream WorkerMessage) returns (stream ControllerMessage);
+}
+
+message WorkerMessage {
+  string worker_id = 1;
+  oneof msg {
+    Register     register  = 10;
+    Heartbeat    heartbeat = 11;
+    Ready        ready     = 12;
+    MetricsBatch metrics   = 13;
+    StateChange  state     = 14;
+  }
+}
+
+message Register {
+  int32 cores = 1;
+  int32 mem_mb = 2;
+  int32 bandwidth_mbps = 3;
+  string resume_run_id = 4;   // set when reconnecting after a controller restart
+}
+
+message Heartbeat {
+  double cpu_pct = 1;
+  double mem_pct = 2;
+  double scheduler_lag_ms = 3;
+  string active_run_id = 4;
+}
+
+message Ready {
+  string run_id = 1;
+}
+
+message MetricsBatch {
+  string run_id = 1;
+  uint64 seq = 2;                              // per worker per run, for dedupe and gap detection
+  google.protobuf.Timestamp window_start = 3;
+  google.protobuf.Timestamp window_end = 4;
+  repeated HistogramMetric histograms = 5;
+  Counters counters = 6;
+}
+
+message HistogramMetric {
+  string name = 1;                // e.g. http_req_duration{endpoint=login}
+  bytes hdr_histogram = 2;        // compressed HdrHistogram
+}
+
+message Counters {
+  uint64 requests = 1;
+  uint64 errors_4xx = 2;
+  uint64 errors_5xx = 3;
+  uint64 timeouts = 4;
+  uint64 conn_resets = 5;
+  uint64 assertion_failures = 6;
+  uint64 bytes_sent = 7;
+  uint64 bytes_received = 8;
+  uint32 active_vus = 9;
+  uint64 dropped_iterations = 10;
+}
+
+message StateChange {
+  string run_id = 1;
+  enum State { RUNNING = 0; DRAINING = 1; FINISHED = 2; FAILED = 3; }
+  State state = 2;
+  string detail = 3;
+}
+
+message ControllerMessage {
+  oneof msg {
+    Assign      assign       = 10;
+    Start       start        = 11;
+    StageChange stage_change = 12;
+    Abort       abort        = 13;
+    Ack         ack          = 14;   // acknowledges metrics seq for backpressure and retries
+  }
+}
+
+message Assign {
+  string run_id = 1;
+  bytes  script = 2;
+  bytes  config_slice = 3;           // this worker's share: vus, rps, stages, thresholds
+  repeated string dataset_urls = 4;  // signed URLs for this worker's shard
+}
+
+message Start {
+  string run_id = 1;
+  google.protobuf.Timestamp start_at = 2;
+}
+
+message StageChange {
+  string run_id = 1;
+  int32 stage_index = 2;
+  google.protobuf.Timestamp effective_at = 3;
+}
+
+message Abort {
+  string run_id = 1;
+  bool graceful = 2;                 // true: drain in-flight, false: stop now
+  string reason = 3;
+}
+
+message Ack {
+  string run_id = 1;
+  uint64 seq = 2;
+}
