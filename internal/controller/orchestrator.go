@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -39,6 +40,12 @@ func NewOrchestrator(registry *Registry, server *CoordinatorServer, merger *metr
 	}
 
 	// Register hooks on server
+	server.hooks.OnRegister = func(workerID string, reg *pb.Register) {
+		if reg.ResumeRunId != "" {
+			orch.RebindWorker(workerID, reg.ResumeRunId)
+		}
+	}
+	server.hooks.OnHeartbeat = orch.handleWorkerHeartbeat
 	server.hooks.OnReady = orch.handleWorkerReady
 	server.hooks.OnStateChange = orch.handleWorkerStateChange
 
@@ -50,6 +57,153 @@ func (o *Orchestrator) SetStore(s store.Store) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.store = s
+}
+
+// RebindWorker handles a reconnecting worker that specifies resume_run_id.
+func (o *Orchestrator) RebindWorker(workerID string, resumeRunID string) bool {
+	o.mu.RLock()
+	run, exists := o.runs[resumeRunID]
+	o.mu.RUnlock()
+
+	if !exists {
+		return false
+	}
+
+	run.mu.Lock()
+	run.Workers[workerID] = "RUNNING"
+	run.mu.Unlock()
+
+	log.Printf("[orchestrator] rebound worker %s to active run %s", workerID, resumeRunID)
+	return true
+}
+
+// RecoverRuns rehydrates active runs from the store after a controller restart.
+func (o *Orchestrator) RecoverRuns(ctx context.Context) ([]string, error) {
+	o.mu.RLock()
+	st := o.store
+	o.mu.RUnlock()
+
+	if st == nil {
+		return nil, nil
+	}
+
+	activeRuns, err := st.GetActiveRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load active runs from store: %w", err)
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	var recoveredIDs []string
+	for _, rec := range activeRuns {
+		var def TestDefinition
+		if len(rec.Definition) > 0 {
+			_ = json.Unmarshal(rec.Definition, &def)
+		}
+		runState := NewRunState(rec.ID, rec.TestID, &def)
+		runState.Status = RunStatus(rec.Status)
+		runState.CurrentStage = rec.CurrentStage
+		runState.Degraded = rec.Degraded
+		runState.StartedAt = rec.StartedAt
+
+		o.runs[rec.ID] = runState
+		recoveredIDs = append(recoveredIDs, rec.ID)
+		log.Printf("[orchestrator] recovered active run %s (status: %s, stage: %d)", rec.ID, rec.Status, rec.CurrentStage)
+	}
+
+	return recoveredIDs, nil
+}
+
+func (o *Orchestrator) handleWorkerHeartbeat(workerID string, hb *pb.Heartbeat) {
+	if hb == nil {
+		return
+	}
+
+	o.registry.UpdateHeartbeat(workerID, hb)
+
+	// Check for generator saturation
+	if hb.CpuPct > 85.0 || hb.SchedulerLagMs > 50.0 {
+		runID := hb.ActiveRunId
+		if runID != "" {
+			o.mu.RLock()
+			run, exists := o.runs[runID]
+			o.mu.RUnlock()
+			if exists {
+				run.SetDegraded(fmt.Sprintf("generator saturation on worker %s: CPU=%.1f%%, scheduler_lag=%.1fms",
+					workerID, hb.CpuPct, hb.SchedulerLagMs))
+			}
+		}
+	}
+}
+
+// StartLeaseMonitor starts a background loop monitoring worker heartbeats and marking lost workers.
+func (o *Orchestrator) StartLeaseMonitor(ctx context.Context, suspectTimeout, deadTimeout, interval time.Duration) {
+	if interval <= 0 {
+		interval = 1 * time.Second
+	}
+	if suspectTimeout <= 0 {
+		suspectTimeout = 5 * time.Second
+	}
+	if deadTimeout <= 0 {
+		deadTimeout = 15 * time.Second
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, deadWorkers := o.registry.CheckLeases(suspectTimeout, deadTimeout)
+				if len(deadWorkers) > 0 {
+					o.handleDeadWorkers(deadWorkers)
+				}
+			}
+		}
+	}()
+}
+
+func (o *Orchestrator) handleDeadWorkers(deadWorkers []string) {
+	o.mu.RLock()
+	activeRuns := make([]*RunState, 0, len(o.runs))
+	for _, r := range o.runs {
+		activeRuns = append(activeRuns, r)
+	}
+	o.mu.RUnlock()
+
+	for _, deadID := range deadWorkers {
+		for _, run := range activeRuns {
+			run.mu.Lock()
+			wState, assigned := run.Workers[deadID]
+			if assigned && wState != "FINISHED" && wState != "LOST" {
+				run.Workers[deadID] = "LOST"
+				run.Degraded = true
+				run.DegradedNotes = append(run.DegradedNotes,
+					fmt.Sprintf("[%s] worker %s lost: heartbeat lease expired", time.Now().Format(time.RFC3339), deadID))
+				log.Printf("[orchestrator] worker %s lost mid-run; run %s flagged DEGRADED", deadID, run.ID)
+
+				// Check if any healthy workers remain
+				hasActive := false
+				for _, st := range run.Workers {
+					if st != "LOST" && st != "DEAD" {
+						hasActive = true
+						break
+					}
+				}
+				if !hasActive && (run.Status == StatusRunning || run.Status == StatusDraining || run.Status == StatusWaitingReady) {
+					run.Status = StatusFailed
+					run.FailureReason = "all assigned workers lost"
+					run.ExitCode = 2
+					log.Printf("[orchestrator] run %s failed: all assigned workers lost", run.ID)
+				}
+			}
+			run.mu.Unlock()
+		}
+	}
 }
 
 func (o *Orchestrator) handleWorkerReady(workerID string, ready *pb.Ready) {

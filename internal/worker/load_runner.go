@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"api-load-testing-engine/internal/dataset"
 	"api-load-testing-engine/internal/metrics"
+	"api-load-testing-engine/internal/objstore"
 	"api-load-testing-engine/internal/protocol"
 	"api-load-testing-engine/internal/scheduler"
 	"api-load-testing-engine/internal/worker/script"
@@ -17,8 +19,10 @@ import (
 
 // LoadRunner executes real load tests driven by the controller.
 type LoadRunner struct {
-	client     *Client
-	httpClient *protocol.ProtocolClient
+	client       *Client
+	httpClient   *protocol.ProtocolClient
+	traceSampler *objstore.TraceSampler
+	dataset      *dataset.Dataset
 
 	mu         sync.Mutex
 	activeRun  string
@@ -43,6 +47,20 @@ func NewLoadRunner(httpClient *protocol.ProtocolClient) *LoadRunner {
 // SetClient binds the gRPC client.
 func (r *LoadRunner) SetClient(client *Client) {
 	r.client = client
+}
+
+// SetTraceSampler configures failure trace sampling for this runner.
+func (r *LoadRunner) SetTraceSampler(ts *objstore.TraceSampler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.traceSampler = ts
+}
+
+// SetDataset configures a streaming dataset for this runner.
+func (r *LoadRunner) SetDataset(ds *dataset.Dataset) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dataset = ds
 }
 
 // OnAssign receives script and config slice, compiles the script, and signals Ready.
@@ -71,6 +89,12 @@ func (r *LoadRunner) OnAssign(assign *pb.Assign) error {
 	if err != nil {
 		r.mu.Unlock()
 		return fmt.Errorf("failed to initialize script runtime: %w", err)
+	}
+	if r.dataset != nil {
+		rt.SetDataset(r.dataset)
+	}
+	if r.traceSampler != nil && r.client != nil {
+		rt.SetTraceSampler(r.traceSampler, assign.RunId, r.client.cfg.WorkerID)
 	}
 	r.runtime = rt
 
@@ -155,12 +179,8 @@ func (r *LoadRunner) flushMetrics(runID string) {
 	}
 
 	batch := agg.SnapshotAndReset()
-	if batch != nil {
-		_ = r.client.Send(&pb.WorkerMessage{
-			Msg: &pb.WorkerMessage_Metrics{
-				Metrics: batch,
-			},
-		})
+	if batch != nil && r.client != nil {
+		r.client.QueueMetrics(batch)
 	}
 }
 

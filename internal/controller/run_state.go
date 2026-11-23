@@ -115,6 +115,34 @@ func (r *RunState) AllWorkersInState(targetState string) bool {
 	return true
 }
 
+// AllActiveWorkersInState checks if all non-lost assigned workers are in the target state.
+func (r *RunState) AllActiveWorkersInState(targetState string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	activeCount := 0
+	for _, st := range r.Workers {
+		if st == "LOST" || st == "DEAD" {
+			continue
+		}
+		activeCount++
+		if st != targetState {
+			return false
+		}
+	}
+	return activeCount > 0
+}
+
+// GetDegradedNotes returns a copy of degradation notes.
+func (r *RunState) GetDegradedNotes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	notes := make([]string, len(r.DegradedNotes))
+	copy(notes, r.DegradedNotes)
+	return notes
+}
+
 // SetExitCode sets the deterministic CLI exit code for this run.
 func (r *RunState) SetExitCode(code int) {
 	r.mu.Lock()

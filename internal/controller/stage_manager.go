@@ -131,7 +131,7 @@ func (sm *StageManager) DrainAndComplete(ctx context.Context, drainTimeout time.
 		case <-ctx.Done():
 			return ctx.Err()
 		case now := <-ticker.C:
-			if sm.runState.AllWorkersInState("FINISHED") {
+			if sm.runState.AllActiveWorkersInState("FINISHED") {
 				sm.runState.Transition(StatusDraining, StatusCompleted)
 				log.Printf("[stage-manager] run %s successfully completed on all workers", sm.runID)
 				return nil

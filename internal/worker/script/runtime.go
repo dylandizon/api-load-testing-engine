@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"api-load-testing-engine/internal/dataset"
 	"api-load-testing-engine/internal/metrics"
+	"api-load-testing-engine/internal/objstore"
 	"api-load-testing-engine/internal/protocol"
 	"github.com/dop251/goja"
 )
@@ -28,11 +30,15 @@ type Response struct {
 
 // Runtime compiles and executes JS test scripts for a VU.
 type Runtime struct {
-	baseURL    string
-	program    *goja.Program
-	aggregator *metrics.LocalAggregator
-	client     *protocol.ProtocolClient
-	mu         sync.Mutex
+	baseURL      string
+	program      *goja.Program
+	aggregator   *metrics.LocalAggregator
+	client       *protocol.ProtocolClient
+	dataset      *dataset.Dataset
+	traceSampler *objstore.TraceSampler
+	runID        string
+	workerID     string
+	mu           sync.Mutex
 }
 
 // NewRuntime compiles the user script and initializes the runtime factory.
@@ -52,6 +58,22 @@ func NewRuntime(scriptSource, baseURL string, agg *metrics.LocalAggregator, clie
 		aggregator: agg,
 		client:     client,
 	}, nil
+}
+
+// SetDataset binds a streaming dataset to the runtime.
+func (r *Runtime) SetDataset(ds *dataset.Dataset) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dataset = ds
+}
+
+// SetTraceSampler binds an asynchronous failure trace sampler to the runtime.
+func (r *Runtime) SetTraceSampler(ts *objstore.TraceSampler, runID, workerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.traceSampler = ts
+	r.runID = runID
+	r.workerID = workerID
 }
 
 // VMInstance wraps an isolated goja VM for a single VU or worker thread.
@@ -149,11 +171,32 @@ func (inst *VMInstance) setupEnvironment() {
 				if inst.parent.aggregator != nil {
 					inst.parent.aggregator.AddAssertionFailure()
 				}
-				_ = name // Available for tracing
+				if inst.parent.traceSampler != nil {
+					inst.parent.traceSampler.RecordTrace(objstore.FailureTrace{
+						RunID:        inst.parent.runID,
+						WorkerID:     inst.parent.workerID,
+						Timestamp:    time.Now(),
+						ErrorType:    "ASSERTION_FAILURE",
+						ResponseBody: fmt.Sprintf("assertion failed: %s", name),
+					})
+				}
 			}
 		}
 		return vm.ToValue(allPassed)
 	})
+
+	// dataset.next()
+	if inst.parent.dataset != nil {
+		datasetObj := vm.NewObject()
+		_ = datasetObj.Set("next", func(call goja.FunctionCall) goja.Value {
+			row, err := inst.parent.dataset.Next()
+			if err != nil {
+				return goja.Null()
+			}
+			return vm.ToValue(row)
+		})
+		_ = vm.Set("dataset", datasetObj)
+	}
 
 	// sleep(ms or '1s')
 	_ = vm.Set("sleep", func(call goja.FunctionCall) goja.Value {
@@ -260,6 +303,28 @@ func (inst *VMInstance) executeRequest(method, rawURL string, bodyVal interface{
 		} else if timing.StatusCode >= 500 {
 			inst.parent.aggregator.AddErrors5xx(1)
 		}
+	}
+
+	if inst.parent.traceSampler != nil && (timing.Error != nil || timing.StatusCode >= 400) {
+		errType := "HTTP_ERROR"
+		if timing.Error != nil {
+			errType = "NETWORK_ERROR"
+		}
+		bodySnippet := string(timing.Body)
+		if len(bodySnippet) > 4096 {
+			bodySnippet = bodySnippet[:4096]
+		}
+		inst.parent.traceSampler.RecordTrace(objstore.FailureTrace{
+			RunID:        inst.parent.runID,
+			WorkerID:     inst.parent.workerID,
+			Timestamp:    time.Now(),
+			ErrorType:    errType,
+			URL:          fullURL,
+			Method:       method,
+			StatusCode:   timing.StatusCode,
+			Headers:      headers,
+			ResponseBody: bodySnippet,
+		})
 	}
 
 	// Build JS response object

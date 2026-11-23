@@ -33,17 +33,68 @@ type Handler interface {
 	OnAck(ack *pb.Ack)
 }
 
+// MetricsBuffer holds metrics batches during network/controller disconnections.
+type MetricsBuffer struct {
+	mu      sync.Mutex
+	maxSize int
+	batches []*pb.MetricsBatch
+}
+
+// NewMetricsBuffer creates a bounded queue for up to maxSize batches.
+func NewMetricsBuffer(maxSize int) *MetricsBuffer {
+	if maxSize <= 0 {
+		maxSize = 60 // 60 seconds of 1-second batches
+	}
+	return &MetricsBuffer{
+		maxSize: maxSize,
+		batches: make([]*pb.MetricsBatch, 0, maxSize),
+	}
+}
+
+// Enqueue adds a batch, dropping oldest if full.
+func (mb *MetricsBuffer) Enqueue(batch *pb.MetricsBatch) {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	if len(mb.batches) >= mb.maxSize {
+		mb.batches = mb.batches[1:]
+	}
+	mb.batches = append(mb.batches, batch)
+}
+
+// Drain returns and clears all buffered batches.
+func (mb *MetricsBuffer) Drain() []*pb.MetricsBatch {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+
+	if len(mb.batches) == 0 {
+		return nil
+	}
+	res := mb.batches
+	mb.batches = make([]*pb.MetricsBatch, 0, mb.maxSize)
+	return res
+}
+
+// Len returns the count of currently buffered batches.
+func (mb *MetricsBuffer) Len() int {
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+	return len(mb.batches)
+}
+
 // Client manages connection to the controller.
 type Client struct {
-	cfg     ClientConfig
-	handler Handler
+	cfg           ClientConfig
+	handler       Handler
+	metricsBuffer *MetricsBuffer
 
-	mu       sync.Mutex
-	conn     *grpc.ClientConn
-	stream   pb.Coordinator_ConnectClient
-	outbox   chan *pb.WorkerMessage
-	cancel   context.CancelFunc
-	activeRun string
+	mu            sync.Mutex
+	conn          *grpc.ClientConn
+	stream        pb.Coordinator_ConnectClient
+	outbox        chan *pb.WorkerMessage
+	cancel        context.CancelFunc
+	activeRun     string
+	connected     bool
 }
 
 // NewClient creates a new worker gRPC client.
@@ -52,9 +103,42 @@ func NewClient(cfg ClientConfig, handler Handler) *Client {
 		cfg.HeartbeatInterval = 1 * time.Second
 	}
 	return &Client{
-		cfg:     cfg,
-		handler: handler,
-		outbox:  make(chan *pb.WorkerMessage, 128),
+		cfg:           cfg,
+		handler:       handler,
+		metricsBuffer: NewMetricsBuffer(60),
+		outbox:        make(chan *pb.WorkerMessage, 128),
+	}
+}
+
+// GetMetricsBuffer returns the internal metrics buffer for testing.
+func (c *Client) GetMetricsBuffer() *MetricsBuffer {
+	return c.metricsBuffer
+}
+
+// QueueMetrics enqueues a metrics batch into the buffer and drains to stream if connected.
+func (c *Client) QueueMetrics(batch *pb.MetricsBatch) {
+	if batch == nil {
+		return
+	}
+	c.metricsBuffer.Enqueue(batch)
+	c.drainMetricsBuffer()
+}
+
+func (c *Client) drainMetricsBuffer() {
+	c.mu.Lock()
+	connected := c.connected
+	c.mu.Unlock()
+
+	if !connected {
+		return
+	}
+
+	for _, batch := range c.metricsBuffer.Drain() {
+		_ = c.Send(&pb.WorkerMessage{
+			Msg: &pb.WorkerMessage_Metrics{
+				Metrics: batch,
+			},
+		})
 	}
 }
 
@@ -138,6 +222,13 @@ func (c *Client) connectAndRun(ctx context.Context) error {
 
 	log.Printf("[worker %s] connected to controller at %s", c.cfg.WorkerID, c.cfg.ControllerAddr)
 
+	c.mu.Lock()
+	resumeID := c.activeRun
+	if resumeID == "" {
+		resumeID = c.cfg.ResumeRunID
+	}
+	c.mu.Unlock()
+
 	// Send Register message immediately
 	err = stream.Send(&pb.WorkerMessage{
 		WorkerId: c.cfg.WorkerID,
@@ -146,13 +237,25 @@ func (c *Client) connectAndRun(ctx context.Context) error {
 				Cores:         c.cfg.Cores,
 				MemMb:         c.cfg.MemMB,
 				BandwidthMbps: c.cfg.BandwidthMBPS,
-				ResumeRunId:   c.cfg.ResumeRunID,
+				ResumeRunId:   resumeID,
 			},
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to send register: %w", err)
 	}
+
+	c.mu.Lock()
+	c.connected = true
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.connected = false
+		c.mu.Unlock()
+	}()
+
+	// Drain any metrics buffered during network disconnect
+	c.drainMetricsBuffer()
 
 	errCh := make(chan error, 3)
 

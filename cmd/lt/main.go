@@ -108,28 +108,16 @@ func runController(args []string) {
 		}
 	}()
 
-	// Lease checker goroutine
+	// Recover uncompleted active runs from store on startup
+	if recovered, err := orch.RecoverRuns(context.Background()); err == nil && len(recovered) > 0 {
+		log.Printf("[controller] rehydrated %d active runs: %v", len(recovered), recovered)
+	}
+
+	// Lease checker & saturation monitor
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				suspects, dead := reg.CheckLeases(5*time.Second, 15*time.Second)
-				if len(suspects) > 0 {
-					log.Printf("[lease-monitor] suspect workers: %v", suspects)
-				}
-				if len(dead) > 0 {
-					log.Printf("[lease-monitor] dead workers: %v", dead)
-				}
-			}
-		}
-	}()
+	orch.StartLeaseMonitor(ctx, 5*time.Second, 15*time.Second, 2*time.Second)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)

@@ -179,6 +179,7 @@ func (s *RESTServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 			"status":         status,
 			"current_stage":  stage,
 			"degraded":       degraded,
+			"degraded_notes": runState.GetDegradedNotes(),
 			"exit_code":      exitCode,
 			"failure_reason": runState.FailureReason,
 		})
@@ -221,6 +222,21 @@ func (s *RESTServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"rollups":  rollups,
 				"counters": counters,
+			})
+			return
+
+		case "traces":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			ctx := r.Context()
+			traces, _ := s.store.GetFailureTraces(ctx, runID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"run_id": runID,
+				"count":  len(traces),
+				"traces": traces,
 			})
 			return
 		}
@@ -287,11 +303,12 @@ func (s *RESTServer) handleRunResult(w http.ResponseWriter, run *RunState) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"run_id":     run.ID,
-		"status":     status,
-		"passed":     allPassed && status == StatusCompleted,
-		"exit_code":  exitCode,
-		"degraded":   degraded,
-		"thresholds": thresholdResults,
+		"run_id":         run.ID,
+		"status":         status,
+		"passed":         allPassed && status == StatusCompleted,
+		"exit_code":      exitCode,
+		"degraded":       degraded,
+		"degraded_notes": run.GetDegradedNotes(),
+		"thresholds":     thresholdResults,
 	})
 }
