@@ -130,17 +130,33 @@ If you have Docker installed and want persistent time-series metrics and live Gr
    docker compose -f deploy/docker-compose.yml up -d
    ```
    This spins up:
-   - **TimescaleDB** on `localhost:5432` (`postgres:postgres`)
+   - **TimescaleDB** on `localhost:5432` (`postgres:password`, database: `loadtesting`)
    - **Grafana** on `http://localhost:3000` (`admin:admin`) with pre-provisioned live dashboards
    - **MinIO S3** on `http://localhost:9000` (Console: `http://localhost:9001`)
 
-2. **Start the Controller with the DB connection**:
+2. **Start the Controller with the DB connection (Terminal 1)**:
    ```powershell
-   go run -mod=vendor ./cmd/lt controller --port 50051 --http-port 8080 --db "postgres://postgres:postgres@localhost:5432/loadtest?sslmode=disable"
+   go run -mod=vendor ./cmd/lt controller --port 50051 --http-port 8080 --db "postgres://postgres:password@localhost:5432/loadtesting?sslmode=disable"
    ```
 
-3. **Start Workers & Run Tests**:
-   Run workers and `lt run` as shown in Mode 1. While the test executes, open `http://localhost:3000` in your browser to view real-time latency quantiles (p50, p90, p95, p99), throughput, error rates, and active VUs.
+3. **Start Worker(s) (Terminal 2 & optional Terminal 3)**:
+   ```powershell
+   go run -mod=vendor ./cmd/lt worker --controller localhost:50051 --id worker-1
+   ```
+
+4. **Execute a Test Run from CLI**:
+   ```powershell
+   go run -mod=vendor ./cmd/lt run examples/checkout.yaml
+   ```
+
+5. **View Live Dashboards in Grafana**:
+   Open **[http://localhost:3000/d/load-testing-engine](http://localhost:3000/d/load-testing-engine)** in your browser:
+   - **Login**: `admin` / `admin` (click *Skip* on first password change prompt).
+   - **Live View**: Set the top-right time range to **"Last 5 minutes"** and auto-refresh to **"1s"** or **"5s"** to watch:
+     - **Throughput (Requests / sec)**: Multi-worker aggregated request rate.
+     - **Latency Percentiles (ms)**: Real-time p50, p90, p95, and p99 curves.
+     - **Errors & Failures**: 4xx, 5xx, timeouts, and assertion failures.
+     - **Active VUs & Dropped Iterations**: Concurrency and generator saturation.
 
 ---
 

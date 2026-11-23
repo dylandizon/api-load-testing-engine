@@ -1,7 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE IF NOT EXISTS tests (
-  id          uuid PRIMARY KEY,
+  id          text PRIMARY KEY,
   name        text NOT NULL,
   version     int  NOT NULL DEFAULT 1,
   definition  jsonb NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS tests (
 );
 
 CREATE TABLE IF NOT EXISTS datasets (
-  id          uuid PRIMARY KEY,
+  id          text PRIMARY KEY,
   name        text NOT NULL,
   object_key  text NOT NULL,
   row_count   bigint,
@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS datasets (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-  id              uuid PRIMARY KEY,
-  test_id         uuid NOT NULL REFERENCES tests(id),
+  id              text PRIMARY KEY,
+  test_id         text NOT NULL,
   definition      jsonb NOT NULL,
   status          text NOT NULL,
   current_stage   int,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 CREATE TABLE IF NOT EXISTS workers (
-  id               uuid PRIMARY KEY,
+  id               text PRIMARY KEY,
   hostname         text,
   cores            int,
   mem_mb           int,
@@ -42,8 +42,8 @@ CREATE TABLE IF NOT EXISTS workers (
 );
 
 CREATE TABLE IF NOT EXISTS run_workers (
-  run_id        uuid REFERENCES runs(id),
-  worker_id     uuid REFERENCES workers(id),
+  run_id        text,
+  worker_id     text,
   vus_share     int,
   rps_share     numeric,
   dataset_range int8range,
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS run_workers (
 );
 
 CREATE TABLE IF NOT EXISTS threshold_results (
-  run_id      uuid REFERENCES runs(id),
+  run_id      text,
   expression  text NOT NULL,
   scope       text NOT NULL DEFAULT 'global',
   observed    double precision,
@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS threshold_results (
 
 CREATE TABLE IF NOT EXISTS failure_traces (
   id          bigserial PRIMARY KEY,
-  run_id      uuid REFERENCES runs(id),
-  worker_id   uuid REFERENCES workers(id),
+  run_id      text,
+  worker_id   text,
   ts          timestamptz NOT NULL,
   error_type  text,
   object_key  text NOT NULL
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS failure_traces (
 -- Hypertables
 CREATE TABLE IF NOT EXISTS metric_rollups (
   ts          timestamptz NOT NULL,
-  run_id      uuid NOT NULL,
+  run_id      text NOT NULL,
   metric      text NOT NULL,
   count       bigint,
   sum         double precision,
@@ -90,7 +90,7 @@ SELECT create_hypertable('metric_rollups', 'ts', if_not_exists => TRUE);
 
 CREATE TABLE IF NOT EXISTS run_counters (
   ts                 timestamptz NOT NULL,
-  run_id             uuid NOT NULL,
+  run_id             text NOT NULL,
   requests           bigint,
   errors_4xx         bigint,
   errors_5xx         bigint,

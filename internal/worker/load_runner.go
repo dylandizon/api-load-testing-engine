@@ -220,6 +220,9 @@ func (r *LoadRunner) OnAbort(abort *pb.Abort) error {
 		close(flushStop)
 	}
 
+	// Synchronously flush remaining metrics before signalling finished
+	r.flushMetrics(runID)
+
 	return r.client.Send(&pb.WorkerMessage{
 		Msg: &pb.WorkerMessage_State{
 			State: &pb.StateChange{

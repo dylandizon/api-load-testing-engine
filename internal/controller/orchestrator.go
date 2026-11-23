@@ -335,6 +335,14 @@ func (o *Orchestrator) StartRun(ctx context.Context, testDef *TestDefinition) (*
 
 		// Drain and await worker completion
 		_ = stageManager.DrainAndComplete(ctx, 10*time.Second)
+
+		// Immediately flush all pending metrics in merger to store
+		o.mu.RLock()
+		m := o.merger
+		o.mu.RUnlock()
+		if m != nil {
+			m.FlushAll()
+		}
 	}()
 
 	return runState, nil

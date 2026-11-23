@@ -1,18 +1,26 @@
 apiVersion: 1
 
+deleteDatasources:
+  - name: TimescaleDB
+    orgId: 1
+
 datasources:
   - name: TimescaleDB
+    uid: timescaledb
     type: postgres
     access: proxy
     url: timescaledb:5432
     user: postgres
-    database: loadtesting
     secureJsonData:
       password: password
     jsonData:
+      database: loadtesting
       sslmode: disable
       timescaledb: true
+      postgresVersion: 1600
       maxOpenConns: 20
       maxIdleConns: 10
       connMaxLifetime: 14400
     isDefault: true
+    editable: true
+

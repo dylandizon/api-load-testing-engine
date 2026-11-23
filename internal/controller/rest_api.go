@@ -246,6 +246,9 @@ func (s *RESTServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *RESTServer) handleRunResult(w http.ResponseWriter, run *RunState) {
+	if s.orchestrator != nil && s.orchestrator.merger != nil {
+		s.orchestrator.merger.FlushAll()
+	}
 	ctx := context.Background()
 	rollups, _ := s.store.GetRollups(ctx, run.ID, "")
 	countersList, _ := s.store.GetCounters(ctx, run.ID)

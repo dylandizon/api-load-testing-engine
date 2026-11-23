@@ -13,11 +13,14 @@
       "id": 1,
       "title": "Throughput (Requests / sec)",
       "type": "timeseries",
-      "datasource": "TimescaleDB",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
       "targets": [
         {
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, requests AS \"RPS\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY ts ASC;",
+          "format": "table",
+          "rawSql": "SELECT ts AS \"time\", requests AS \"RPS\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY 1;",
           "refId": "A"
         }
       ]
@@ -28,11 +31,14 @@
       "id": 2,
       "title": "Latency Percentiles (ms)",
       "type": "timeseries",
-      "datasource": "TimescaleDB",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
       "targets": [
         {
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, p50, p90, p95, p99 FROM metric_rollups WHERE $__timeFilter(ts) AND metric = 'http_req_duration' ORDER BY ts ASC;",
+          "format": "table",
+          "rawSql": "SELECT ts AS \"time\", p50, p90, p95, p99 FROM metric_rollups WHERE $__timeFilter(ts) AND metric = 'http_req_duration' ORDER BY 1;",
           "refId": "A"
         }
       ]
@@ -43,11 +49,14 @@
       "id": 3,
       "title": "Errors & Failures",
       "type": "timeseries",
-      "datasource": "TimescaleDB",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
       "targets": [
         {
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, errors_4xx AS \"4xx Errors\", errors_5xx AS \"5xx Errors\", timeouts AS \"Timeouts\", assertion_failures AS \"Check Failures\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY ts ASC;",
+          "format": "table",
+          "rawSql": "SELECT ts AS \"time\", errors_4xx AS \"4xx Errors\", errors_5xx AS \"5xx Errors\", timeouts AS \"Timeouts\", assertion_failures AS \"Check Failures\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY 1;",
           "refId": "A"
         }
       ]
@@ -58,11 +67,14 @@
       "id": 4,
       "title": "Active VUs & Dropped Iterations",
       "type": "timeseries",
-      "datasource": "TimescaleDB",
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
       "targets": [
         {
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, active_vus AS \"Active VUs\", dropped_iterations AS \"Dropped Iterations\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY ts ASC;",
+          "format": "table",
+          "rawSql": "SELECT ts AS \"time\", active_vus AS \"Active VUs\", dropped_iterations AS \"Dropped Iterations\" FROM run_counters WHERE $__timeFilter(ts) ORDER BY 1;",
           "refId": "A"
         }
       ]

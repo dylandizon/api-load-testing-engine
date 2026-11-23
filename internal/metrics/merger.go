@@ -223,7 +223,9 @@ func (m *Merger) flushBucket(bucket *WindowBucket) {
 		ActiveVUs:         bucket.activeVUs,
 		DroppedIterations: bucket.droppedIterations,
 	}
-	_ = m.sink.SaveCounters(countersRec)
+	if err := m.sink.SaveCounters(countersRec); err != nil {
+		log.Printf("[merger] error saving counters for run %s: %v", bucket.RunID, err)
+	}
 
 	// 2. Flush histograms and precomputed rollups
 	for metricName, h := range bucket.histograms {
@@ -245,7 +247,9 @@ func (m *Merger) flushBucket(bucket *WindowBucket) {
 			P999:      summary.P999,
 			Histogram: blob,
 		}
-		_ = m.sink.SaveRollup(rollup)
+		if err := m.sink.SaveRollup(rollup); err != nil {
+			log.Printf("[merger] error saving rollup %s for run %s: %v", metricName, bucket.RunID, err)
+		}
 	}
 }
 

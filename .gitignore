@@ -1,0 +1,5 @@
+bin/
+scratch_check_db.go
+scratch/
+*.exe
+*.test

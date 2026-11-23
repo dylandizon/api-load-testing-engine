@@ -6,9 +6,9 @@ scenarios:
   - name: checkout
     executor: closed
     stages:
-      - duration: 3s
-        target: 6
-    think_time: 50ms
+      - duration: 60s
+        target: 10
+    think_time: 20ms
     script: |
       let res = http.get('/health');
       check(res.status == 200, 'status is 200');
