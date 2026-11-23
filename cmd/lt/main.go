@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"api-load-testing-engine/internal/controller"
+	"api-load-testing-engine/internal/metrics"
+	"api-load-testing-engine/internal/store"
 	"api-load-testing-engine/internal/worker"
 	pb "api-load-testing-engine/proto"
 	"github.com/google/uuid"
@@ -55,7 +57,25 @@ func printUsage() {
 func runController(args []string) {
 	fs := flag.NewFlagSet("controller", flag.ExitOnError)
 	port := fs.Int("port", 50051, "gRPC port to listen on")
+	dbURL := fs.String("db", "", "PostgreSQL/TimescaleDB connection string (in-memory if empty)")
 	_ = fs.Parse(args)
+
+	var s store.Store
+	if *dbURL != "" {
+		pg, err := store.NewPostgresStore(*dbURL)
+		if err != nil {
+			log.Fatalf("failed to connect to database: %v", err)
+		}
+		s = pg
+		log.Println("[controller] connected to PostgreSQL/TimescaleDB")
+	} else {
+		s = store.NewMemStore()
+		log.Println("[controller] running with in-memory metrics store")
+	}
+	defer s.Close()
+
+	merger := metrics.NewMerger(s, 1500*time.Millisecond)
+	defer merger.Stop()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
@@ -73,6 +93,7 @@ func runController(args []string) {
 	}
 
 	coordServer := controller.NewCoordinatorServer(reg, hooks)
+	coordServer.SetMerger(merger)
 	grpcServer := grpc.NewServer()
 	pb.RegisterCoordinatorServer(grpcServer, coordServer)
 

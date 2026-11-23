@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"api-load-testing-engine/internal/metrics"
 	pb "api-load-testing-engine/proto"
 )
 
@@ -22,6 +23,7 @@ type ServerHooks struct {
 type CoordinatorServer struct {
 	pb.UnimplementedCoordinatorServer
 	registry *Registry
+	merger   *metrics.Merger
 	hooks    ServerHooks
 	mu       sync.Mutex
 	workerCh map[string]chan *pb.ControllerMessage
@@ -34,6 +36,13 @@ func NewCoordinatorServer(registry *Registry, hooks ServerHooks) *CoordinatorSer
 		hooks:    hooks,
 		workerCh: make(map[string]chan *pb.ControllerMessage),
 	}
+}
+
+// SetMerger sets the metrics merger.
+func (s *CoordinatorServer) SetMerger(m *metrics.Merger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.merger = m
 }
 
 // Connect handles the bidirectional stream between worker and controller.
@@ -130,6 +139,12 @@ func (s *CoordinatorServer) Connect(stream pb.Coordinator_ConnectServer) error {
 					},
 				},
 			})
+			s.mu.Lock()
+			merger := s.merger
+			s.mu.Unlock()
+			if merger != nil {
+				_ = merger.IngestBatch(workerID, m.Metrics)
+			}
 			if s.hooks.OnMetricsBatch != nil {
 				s.hooks.OnMetricsBatch(workerID, m.Metrics)
 			}

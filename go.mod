@@ -6,6 +6,7 @@ require (
 	github.com/HdrHistogram/hdrhistogram-go v1.4.0
 	github.com/dop251/goja v0.0.0-20261122185237-35fdc4b88e39
 	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.12.3
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 )
