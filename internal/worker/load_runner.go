@@ -15,17 +15,6 @@ import (
 	pb "api-load-testing-engine/proto"
 )
 
-// WorkerConfigSlice defines the parsed configuration delivered to a worker in Assign.
-type WorkerConfigSlice struct {
-	BaseURL    string            `json:"base_url"`
-	Executor   string            `json:"executor"` // "open" or "closed"
-	TargetVUs  int               `json:"target_vus"`
-	TargetRPS  float64           `json:"target_rps"`
-	ThinkTime  string            `json:"think_time"`
-	MaxVUs     int               `json:"max_vus"`
-	Stages     []scheduler.Stage `json:"stages"`
-}
-
 // LoadRunner executes real load tests driven by the controller.
 type LoadRunner struct {
 	client     *Client
@@ -37,7 +26,7 @@ type LoadRunner struct {
 	aggregator *metrics.LocalAggregator
 	executor   scheduler.Executor
 	cancel     context.CancelFunc
-	config     WorkerConfigSlice
+	config     scheduler.WorkerConfigSlice
 	flushStop  chan struct{}
 }
 
@@ -61,7 +50,7 @@ func (r *LoadRunner) OnAssign(assign *pb.Assign) error {
 	r.mu.Lock()
 	r.activeRun = assign.RunId
 
-	var cfg WorkerConfigSlice
+	var cfg scheduler.WorkerConfigSlice
 	if len(assign.ConfigSlice) > 0 {
 		if err := json.Unmarshal(assign.ConfigSlice, &cfg); err != nil {
 			log.Printf("[load-runner] config unmarshal error: %v", err)

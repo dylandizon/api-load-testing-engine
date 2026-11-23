@@ -20,3 +20,14 @@ type Stage struct {
 	Duration time.Duration `json:"duration"`
 	Target   float64       `json:"target"`
 }
+
+// WorkerConfigSlice defines the parsed configuration slice delivered to a worker in Assign.
+type WorkerConfigSlice struct {
+	BaseURL   string  `json:"base_url"`
+	Executor  string  `json:"executor"` // "open" or "closed"
+	TargetVUs int     `json:"target_vus"`
+	TargetRPS float64 `json:"target_rps"`
+	ThinkTime string  `json:"think_time"`
+	MaxVUs    int     `json:"max_vus"`
+	Stages    []Stage `json:"stages"`
+}

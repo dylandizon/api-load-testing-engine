@@ -17,6 +17,7 @@ type ClosedExecutor struct {
 	aggregator *metrics.LocalAggregator
 
 	mu       sync.Mutex
+	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	vuIDSeq  int64
@@ -40,6 +41,7 @@ func NewClosedExecutor(targetVUs int, thinkTime time.Duration, runner IterationR
 func (e *ClosedExecutor) Start(ctx context.Context) error {
 	e.mu.Lock()
 	ctx, cancel := context.WithCancel(ctx)
+	e.ctx = ctx
 	e.cancel = cancel
 	target := atomic.LoadInt64(&e.targetVUs)
 	e.mu.Unlock()
@@ -116,8 +118,13 @@ func (e *ClosedExecutor) UpdateTarget(target float64) {
 	if newTarget > currentActive {
 		// Scale up
 		diff := newTarget - currentActive
-		for i := int64(0); i < diff; i++ {
-			e.spawnVU(context.Background())
+		e.mu.Lock()
+		ctx := e.ctx
+		e.mu.Unlock()
+		if ctx != nil {
+			for i := int64(0); i < diff; i++ {
+				e.spawnVU(ctx)
+			}
 		}
 	}
 }
