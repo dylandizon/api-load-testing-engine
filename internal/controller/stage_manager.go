@@ -96,9 +96,22 @@ func (sm *StageManager) RunStages(ctx context.Context, startAt time.Time) error 
 		}
 	}
 
-	// 3. All stages finished: transition to DRAINING
+	// 3. All stages finished: transition to DRAINING and broadcast graceful completion to workers
 	log.Printf("[stage-manager] run %s completed all stages. Transitioning to DRAINING...", sm.runID)
 	sm.runState.Transition(StatusRunning, StatusDraining)
+
+	drainMsg := &pb.ControllerMessage{
+		Msg: &pb.ControllerMessage_Abort{
+			Abort: &pb.Abort{
+				RunId:    sm.runID,
+				Graceful: true,
+				Reason:   "stages completed",
+			},
+		},
+	}
+	for _, wID := range sm.assignedWorkers {
+		_ = sm.server.SendMessage(wID, drainMsg)
+	}
 
 	return nil
 }

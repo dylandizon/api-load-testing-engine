@@ -7,26 +7,92 @@ import (
 	"sort"
 
 	"api-load-testing-engine/internal/scheduler"
+	"gopkg.in/yaml.v3"
 )
 
 // ScenarioDefinition defines a test scenario from test definition.
 type ScenarioDefinition struct {
-	Name      string            `json:"name"`
-	Executor  string            `json:"executor"` // "open" or "closed"
-	Stages    []scheduler.Stage `json:"stages"`
-	MaxVUs    int               `json:"max_vus"`
-	ThinkTime string            `json:"think_time"`
-	Script    string            `json:"script"`
+	Name      string            `json:"name" yaml:"name"`
+	Executor  string            `json:"executor" yaml:"executor"` // "open" or "closed"
+	Stages    []scheduler.Stage `json:"stages" yaml:"stages"`
+	MaxVUs    int               `json:"max_vus" yaml:"max_vus"`
+	ThinkTime string            `json:"think_time" yaml:"think_time"`
+	Script    string            `json:"script" yaml:"script"`
 }
 
 // TestDefinition represents the complete test configuration.
 type TestDefinition struct {
-	Name       string               `json:"name"`
-	Version    int                  `json:"version"`
-	BaseURL    string               `json:"base_url"`
-	Protocol   string               `json:"protocol"`
-	Scenarios  []ScenarioDefinition `json:"scenarios"`
-	Thresholds []ThresholdDef       `json:"thresholds"`
+	Name       string               `json:"name" yaml:"name"`
+	Version    int                  `json:"version" yaml:"version"`
+	BaseURL    string               `json:"base_url" yaml:"base_url"`
+	Protocol   string               `json:"protocol" yaml:"protocol"`
+	Scenarios  []ScenarioDefinition `json:"scenarios" yaml:"scenarios"`
+	Thresholds []ThresholdDef       `json:"thresholds" yaml:"thresholds"`
+}
+
+// UnmarshalYAML supports flexible test definitions (slice or map scenarios, or root stages).
+func (t *TestDefinition) UnmarshalYAML(value *yaml.Node) error {
+	type rawTestDef struct {
+		Name       string            `yaml:"name"`
+		Version    int               `yaml:"version"`
+		BaseURL    string            `yaml:"base_url"`
+		Protocol   string            `yaml:"protocol"`
+		Executor   string            `yaml:"executor"`
+		Stages     []scheduler.Stage `yaml:"stages"`
+		MaxVUs     int               `yaml:"max_vus"`
+		ThinkTime  string            `yaml:"think_time"`
+		Script     string            `yaml:"script"`
+		Scenarios  yaml.Node         `yaml:"scenarios"`
+		Thresholds []ThresholdDef    `yaml:"thresholds"`
+	}
+
+	var raw rawTestDef
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	t.Name = raw.Name
+	t.Version = raw.Version
+	t.BaseURL = raw.BaseURL
+	t.Protocol = raw.Protocol
+	t.Thresholds = raw.Thresholds
+
+	if raw.Scenarios.Kind == yaml.SequenceNode {
+		if err := raw.Scenarios.Decode(&t.Scenarios); err != nil {
+			return err
+		}
+	} else if raw.Scenarios.Kind == yaml.MappingNode {
+		var scenMap map[string]ScenarioDefinition
+		if err := raw.Scenarios.Decode(&scenMap); err != nil {
+			return err
+		}
+		for name, sc := range scenMap {
+			if sc.Name == "" {
+				sc.Name = name
+			}
+			if sc.Executor == "" && raw.Executor != "" {
+				sc.Executor = raw.Executor
+			}
+			if len(sc.Stages) == 0 && len(raw.Stages) > 0 {
+				sc.Stages = raw.Stages
+			}
+			t.Scenarios = append(t.Scenarios, sc)
+		}
+	} else if len(raw.Stages) > 0 {
+		executor := raw.Executor
+		if executor == "" {
+			executor = "closed"
+		}
+		t.Scenarios = append(t.Scenarios, ScenarioDefinition{
+			Name:      "default",
+			Executor:  executor,
+			Stages:    raw.Stages,
+			MaxVUs:    raw.MaxVUs,
+			ThinkTime: raw.ThinkTime,
+			Script:    raw.Script,
+		})
+	}
+	return nil
 }
 
 // ThresholdDef defines a threshold rule.

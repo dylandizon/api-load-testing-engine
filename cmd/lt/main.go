@@ -36,9 +36,7 @@ func main() {
 	case "worker":
 		runWorker(os.Args[2:])
 	case "run":
-		// Reserved for Milestone 5 CLI client
-		fmt.Println("CLI 'run' client will be implemented in Milestone 5")
-		os.Exit(0)
+		runCLI(os.Args[2:])
 	default:
 		fmt.Printf("Unknown subcommand: %s\n", subcommand)
 		printUsage()
@@ -57,6 +55,7 @@ func printUsage() {
 func runController(args []string) {
 	fs := flag.NewFlagSet("controller", flag.ExitOnError)
 	port := fs.Int("port", 50051, "gRPC port to listen on")
+	httpPort := fs.Int("http-port", 8080, "HTTP REST API port to listen on")
 	dbURL := fs.String("db", "", "PostgreSQL/TimescaleDB connection string (in-memory if empty)")
 	_ = fs.Parse(args)
 
@@ -97,6 +96,18 @@ func runController(args []string) {
 	grpcServer := grpc.NewServer()
 	pb.RegisterCoordinatorServer(grpcServer, coordServer)
 
+	// Orchestrator & REST Server
+	orch := controller.NewOrchestrator(reg, coordServer, merger)
+	orch.SetStore(s)
+	restServer := controller.NewRESTServer(orch, s)
+
+	go func() {
+		log.Printf("Starting lt controller REST API on port %d...", *httpPort)
+		if err := restServer.Start(*httpPort); err != nil && err != http.ErrServerClosed {
+			log.Printf("REST API server error: %v", err)
+		}
+	}()
+
 	// Lease checker goroutine
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -126,6 +137,7 @@ func runController(args []string) {
 		<-sigCh
 		log.Println("Shutting down controller...")
 		cancel()
+		_ = restServer.Stop(context.Background())
 		grpcServer.GracefulStop()
 	}()
 

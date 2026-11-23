@@ -115,6 +115,13 @@ func (r *RunState) AllWorkersInState(targetState string) bool {
 	return true
 }
 
+// SetExitCode sets the deterministic CLI exit code for this run.
+func (r *RunState) SetExitCode(code int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ExitCode = code
+}
+
 // GetStatus returns the current status and stage of the run.
 func (r *RunState) GetStatus() (RunStatus, int, bool, int) {
 	r.mu.RLock()

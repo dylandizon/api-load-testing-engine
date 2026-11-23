@@ -1,0 +1,20 @@
+name: checkout-load-test
+version: 1
+base_url: http://localhost:8080/mock
+protocol: http1
+scenarios:
+  - name: checkout
+    executor: closed
+    stages:
+      - duration: 3s
+        target: 6
+    think_time: 50ms
+    script: |
+      let res = http.get('/health');
+      check(res.status == 200, 'status is 200');
+thresholds:
+  - metric: http_req_duration
+    expr: p95 < 500
+    abort_on_fail: true
+  - metric: error_rate
+    expr: rate < 0.05

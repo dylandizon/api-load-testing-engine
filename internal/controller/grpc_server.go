@@ -45,6 +45,13 @@ func (s *CoordinatorServer) SetMerger(m *metrics.Merger) {
 	s.merger = m
 }
 
+// RegisterWorkerChannel registers a worker channel for testing or mock workers.
+func (s *CoordinatorServer) RegisterWorkerChannel(workerID string, ch chan *pb.ControllerMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workerCh[workerID] = ch
+}
+
 // Connect handles the bidirectional stream between worker and controller.
 func (s *CoordinatorServer) Connect(stream pb.Coordinator_ConnectServer) error {
 	ctx := stream.Context()
