@@ -128,7 +128,18 @@ func runWorker(args []string) {
 		*workerID = fmt.Sprintf("worker-%s", uuid.New().String()[:8])
 	}
 
-	runner := worker.NewSimpleRunner(&http.Client{Timeout: 5 * time.Second})
+	var runner worker.Handler
+	var simpleRunner *worker.SimpleRunner
+	var loadRunner *worker.LoadRunner
+
+	if *target != "" {
+		simpleRunner = worker.NewSimpleRunner(&http.Client{Timeout: 5 * time.Second})
+		runner = simpleRunner
+	} else {
+		loadRunner = worker.NewLoadRunner(nil)
+		runner = loadRunner
+	}
+
 	cfg := worker.ClientConfig{
 		WorkerID:          *workerID,
 		ControllerAddr:    *controllerAddr,
@@ -139,7 +150,11 @@ func runWorker(args []string) {
 	}
 
 	client := worker.NewClient(cfg, runner)
-	runner.SetClient(client)
+	if simpleRunner != nil {
+		simpleRunner.SetClient(client)
+	} else if loadRunner != nil {
+		loadRunner.SetClient(client)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
