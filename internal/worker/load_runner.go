@@ -8,28 +8,21 @@ import (
 	"sync"
 	"time"
 
+	"api-load-testing-engine/internal/dataset"
 	"api-load-testing-engine/internal/metrics"
+	"api-load-testing-engine/internal/objstore"
 	"api-load-testing-engine/internal/protocol"
 	"api-load-testing-engine/internal/scheduler"
 	"api-load-testing-engine/internal/worker/script"
 	pb "api-load-testing-engine/proto"
 )
 
-// WorkerConfigSlice defines the parsed configuration delivered to a worker in Assign.
-type WorkerConfigSlice struct {
-	BaseURL    string            `json:"base_url"`
-	Executor   string            `json:"executor"` // "open" or "closed"
-	TargetVUs  int               `json:"target_vus"`
-	TargetRPS  float64           `json:"target_rps"`
-	ThinkTime  string            `json:"think_time"`
-	MaxVUs     int               `json:"max_vus"`
-	Stages     []scheduler.Stage `json:"stages"`
-}
-
 // LoadRunner executes real load tests driven by the controller.
 type LoadRunner struct {
-	client     *Client
-	httpClient *protocol.ProtocolClient
+	client       *Client
+	httpClient   *protocol.ProtocolClient
+	traceSampler *objstore.TraceSampler
+	dataset      *dataset.Dataset
 
 	mu         sync.Mutex
 	activeRun  string
@@ -37,7 +30,7 @@ type LoadRunner struct {
 	aggregator *metrics.LocalAggregator
 	executor   scheduler.Executor
 	cancel     context.CancelFunc
-	config     WorkerConfigSlice
+	config     scheduler.WorkerConfigSlice
 	flushStop  chan struct{}
 }
 
@@ -56,12 +49,26 @@ func (r *LoadRunner) SetClient(client *Client) {
 	r.client = client
 }
 
+// SetTraceSampler configures failure trace sampling for this runner.
+func (r *LoadRunner) SetTraceSampler(ts *objstore.TraceSampler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.traceSampler = ts
+}
+
+// SetDataset configures a streaming dataset for this runner.
+func (r *LoadRunner) SetDataset(ds *dataset.Dataset) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dataset = ds
+}
+
 // OnAssign receives script and config slice, compiles the script, and signals Ready.
 func (r *LoadRunner) OnAssign(assign *pb.Assign) error {
 	r.mu.Lock()
 	r.activeRun = assign.RunId
 
-	var cfg WorkerConfigSlice
+	var cfg scheduler.WorkerConfigSlice
 	if len(assign.ConfigSlice) > 0 {
 		if err := json.Unmarshal(assign.ConfigSlice, &cfg); err != nil {
 			log.Printf("[load-runner] config unmarshal error: %v", err)
@@ -82,6 +89,12 @@ func (r *LoadRunner) OnAssign(assign *pb.Assign) error {
 	if err != nil {
 		r.mu.Unlock()
 		return fmt.Errorf("failed to initialize script runtime: %w", err)
+	}
+	if r.dataset != nil {
+		rt.SetDataset(r.dataset)
+	}
+	if r.traceSampler != nil && r.client != nil {
+		rt.SetTraceSampler(r.traceSampler, assign.RunId, r.client.cfg.WorkerID)
 	}
 	r.runtime = rt
 
@@ -166,12 +179,8 @@ func (r *LoadRunner) flushMetrics(runID string) {
 	}
 
 	batch := agg.SnapshotAndReset()
-	if batch != nil {
-		_ = r.client.Send(&pb.WorkerMessage{
-			Msg: &pb.WorkerMessage_Metrics{
-				Metrics: batch,
-			},
-		})
+	if batch != nil && r.client != nil {
+		r.client.QueueMetrics(batch)
 	}
 }
 

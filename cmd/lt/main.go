@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"api-load-testing-engine/internal/controller"
+	"api-load-testing-engine/internal/metrics"
+	"api-load-testing-engine/internal/store"
 	"api-load-testing-engine/internal/worker"
 	pb "api-load-testing-engine/proto"
 	"github.com/google/uuid"
@@ -34,9 +36,7 @@ func main() {
 	case "worker":
 		runWorker(os.Args[2:])
 	case "run":
-		// Reserved for Milestone 5 CLI client
-		fmt.Println("CLI 'run' client will be implemented in Milestone 5")
-		os.Exit(0)
+		runCLI(os.Args[2:])
 	default:
 		fmt.Printf("Unknown subcommand: %s\n", subcommand)
 		printUsage()
@@ -55,7 +55,26 @@ func printUsage() {
 func runController(args []string) {
 	fs := flag.NewFlagSet("controller", flag.ExitOnError)
 	port := fs.Int("port", 50051, "gRPC port to listen on")
+	httpPort := fs.Int("http-port", 8080, "HTTP REST API port to listen on")
+	dbURL := fs.String("db", "", "PostgreSQL/TimescaleDB connection string (in-memory if empty)")
 	_ = fs.Parse(args)
+
+	var s store.Store
+	if *dbURL != "" {
+		pg, err := store.NewPostgresStore(*dbURL)
+		if err != nil {
+			log.Fatalf("failed to connect to database: %v", err)
+		}
+		s = pg
+		log.Println("[controller] connected to PostgreSQL/TimescaleDB")
+	} else {
+		s = store.NewMemStore()
+		log.Println("[controller] running with in-memory metrics store")
+	}
+	defer s.Close()
+
+	merger := metrics.NewMerger(s, 1500*time.Millisecond)
+	defer merger.Stop()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
@@ -73,31 +92,32 @@ func runController(args []string) {
 	}
 
 	coordServer := controller.NewCoordinatorServer(reg, hooks)
+	coordServer.SetMerger(merger)
 	grpcServer := grpc.NewServer()
 	pb.RegisterCoordinatorServer(grpcServer, coordServer)
 
-	// Lease checker goroutine
+	// Orchestrator & REST Server
+	orch := controller.NewOrchestrator(reg, coordServer, merger)
+	orch.SetStore(s)
+	restServer := controller.NewRESTServer(orch, s)
+
+	go func() {
+		log.Printf("Starting lt controller REST API on port %d...", *httpPort)
+		if err := restServer.Start(*httpPort); err != nil && err != http.ErrServerClosed {
+			log.Printf("REST API server error: %v", err)
+		}
+	}()
+
+	// Recover uncompleted active runs from store on startup
+	if recovered, err := orch.RecoverRuns(context.Background()); err == nil && len(recovered) > 0 {
+		log.Printf("[controller] rehydrated %d active runs: %v", len(recovered), recovered)
+	}
+
+	// Lease checker & saturation monitor
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				suspects, dead := reg.CheckLeases(5*time.Second, 15*time.Second)
-				if len(suspects) > 0 {
-					log.Printf("[lease-monitor] suspect workers: %v", suspects)
-				}
-				if len(dead) > 0 {
-					log.Printf("[lease-monitor] dead workers: %v", dead)
-				}
-			}
-		}
-	}()
+	orch.StartLeaseMonitor(ctx, 5*time.Second, 15*time.Second, 2*time.Second)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -105,6 +125,7 @@ func runController(args []string) {
 		<-sigCh
 		log.Println("Shutting down controller...")
 		cancel()
+		_ = restServer.Stop(context.Background())
 		grpcServer.GracefulStop()
 	}()
 

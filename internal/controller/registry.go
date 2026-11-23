@@ -138,7 +138,7 @@ func (r *Registry) CheckLeases(suspectTimeout, deadTimeout time.Duration) (suspe
 		if elapsed > deadTimeout && w.Status != "dead" {
 			w.Status = "dead"
 			dead = append(dead, id)
-		} else if elapsed > suspectTimeout && w.Status == "idle" {
+		} else if elapsed > suspectTimeout && w.Status != "suspect" && w.Status != "dead" {
 			w.Status = "suspect"
 			suspects = append(suspects, id)
 		}
