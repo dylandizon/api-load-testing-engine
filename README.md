@@ -1,8 +1,5 @@
 # Distributed API Load Testing Engine (`lt`)
 
-[![Go Version](https://img.shields.io/badge/go-1.22%2B-blue.svg)](https://golang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
 A high-throughput, low-overhead distributed load testing and performance benchmarking engine written in Go. A central controller coordinates a fleet of load generation workers over bidirectional gRPC streams, executing multi-stage load profiles with two-phase synchronization barriers, lossless 1-second metric rollups, automated threshold evaluation, and TimescaleDB/Grafana persistence.
 
 ---
